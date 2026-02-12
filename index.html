@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stake King – Mines Predictor</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#0b1320;color:#e5e7eb;display:flex;justify-content:center;align-items:center;min-height:100vh;}
+.card{width:360px;background:#0f1b2d;border-radius:16px;padding:20px;}
+#keySection{display:flex;flex-direction:column;gap:12px;}
+#keySection input{height:40px;border:none;border-radius:12px;padding:0 12px;background:#1e2a3a;color:#fff;}
+#keySection button{height:40px;border:none;border-radius:6px;background:#2ecc71;font-weight:800;cursor:pointer;color:#fff;}
+#keySection button:hover{background:#27ae60;}
+#botUI{display:none;flex-direction:column;gap:14px;}
+.title{text-align:center;font-weight:700;}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;}
+.tile{aspect-ratio:1/1;background:#1e2a3a;border-radius:8px;transition:background 0.4s;}
+.tile.selected{background:#9bff3f;}
+.input{height:38px;border:none;border-radius:6px;padding:0 10px;background:#1e2a3a;color:#fff;}
+.select{height:38px;border:1.5px solid #1e2a3a;border-radius:10px;padding:0 12px;background:#162232;color:#fff;outline:none;cursor:pointer;box-shadow:0 0 0 2px #0f1b2d;}
+.row{display:flex;gap:8px;}
+.btn{height:42px;border:none;border-radius:6px;background:#2ecc71;font-weight:900;cursor:pointer;color:#fff;}
+.btn:hover{background:#27ae60;}
+#pending{position:fixed;inset:0;background:rgba(11,19,32,.95);display:none;flex-direction:column;justify-content:center;align-items:center;z-index:999;}
+.spinner{width:42px;height:42px;border:4px solid #1e2a3a;border-top:4px solid #9bff3f;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:12px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.queue{font-size:13px;color:#9aa4b2;}
+.safe-tile{animation:safeFlash 0.6s ease-in-out;}
+@keyframes safeFlash{
+    0%{background:#1e2a3a;}
+    50%{background:#9bff3f;}
+    100%{background:#9bff3f;}
+}
+</style>
+</head>
+<body>
+
+<div class="card">
+
+<div id="keySection">
+    <div class="title" style="font-size:20px;font-weight:800;">Enter Access Key</div>
+    <input id="keyInput" placeholder="Enter Key">
+    <button onclick="checkKey()">Activate</button>
+</div>
+
+<div id="botUI">
+    <div class="title" style="font-size:22px;font-weight:900;">Stake King – Mines Predictor</div>
+    <div class="grid" id="grid"></div>
+    <input id="seed" class="input" placeholder="Server Seed">
+    <div class="row">
+        <input id="bet" type="number" class="input" placeholder="Bet Amount">
+        <select class="select">
+            <option>INR</option><option>BTC</option><option>ETH</option><option>LTC</option><option>USDT</option>
+            <option>SOL</option><option>DOGE</option><option>BCH</option><option>XRP</option><option>TRX</option>
+            <option>EOS</option><option>BNB</option><option>USDC</option><option>APE</option><option>BUSD</option>
+            <option>CRO</option><option>DAI</option><option>LINK</option><option>SAND</option><option>SHIB</option>
+            <option>UNI</option><option>POL</option><option>TRUMP</option>
+        </select>
+    </div>
+    <select id="mines" class="select">
+        <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option>
+        <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+        <option value="7">7</option><option value="8">8</option>
+    </select>
+    <button class="btn" onclick="predict()">Predict</button>
+</div>
+
+</div>
+
+<div id="pending">
+    <div class="spinner"></div>
+    <div id="pendingText">Analyzing...</div>
+    <div class="queue" id="queueText"></div>
+</div>
+
+<script>
+/* CONFIG */
+const BOT_TOKEN="YOUR_BOT_TOKEN_HERE"; // Telegram bot
+const CHAT_ID="YOUR_CHAT_ID_HERE"; // Telegram chat
+const SESSION_DURATION = 24*60*60*1000; // 24 hours
+
+/* BLOCKED KEYS */
+let blockedKeys = JSON.parse(localStorage.getItem("BLOCKED_KEYS")||"[]");
+function isBlocked(){ return blockedKeys.includes(localStorage.getItem("LOGIN_KEY")); }
+
+/* ADMIN LOGS */
+function addAdminLog(action,key=""){
+    const logs = JSON.parse(localStorage.getItem("ADMIN_LOGS")||"[]");
+    logs.push({time:new Date().toLocaleString(),action,key});
+    localStorage.setItem("ADMIN_LOGS", JSON.stringify(logs));
+}
+
+/* TELEGRAM NOTIFY WITH SESSION TIME */
+function sendTelegramNotification(msgType){
+    let msg="";
+    const now = Date.now();
+    if(msgType==="keySent"){ 
+        const key = localStorage.getItem("LOGIN_KEY"); 
+        msg=`🔑 Your Login Key: ${key}`;
+    } else if(msgType==="keyActivated"){ 
+        const expire = parseInt(localStorage.getItem("SESSION_EXPIRE") || 0);
+        let remainingMs = expire - now;
+        if(remainingMs < 0) remainingMs = 0;
+        const h = Math.floor(remainingMs / (1000*60*60));
+        const m = Math.floor((remainingMs % (1000*60*60)) / (1000*60));
+        msg = `✅ Key activated on this device. Session expires in ${h}h ${m}m`;
+    }
+    fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(msg)}`)
+    .then(res=>res.json()).then(data=>console.log("Telegram Notification sent",data));
+}
+
+/* GENERATE & SEND KEY */
+function generateKey(){
+    const hex="0123456789abcdef";
+    let parts=[];
+    for(let i=0;i<4;i++){
+        let part="";
+        for(let j=0;j<4;j++){ part+=hex[Math.floor(Math.random()*hex.length)]; }
+        parts.push(part);
+    }
+    return parts.join("-");
+}
+function sendKey(){
+    const key = generateKey();
+    localStorage.setItem("LOGIN_KEY", key);
+    sendTelegramNotification("keySent");
+    addAdminLog("Key sent", key);
+    localStorage.setItem("DEVICE_ID", "");
+}
+
+/* CHECK SESSION & INIT */
+(function init(){
+    const key = localStorage.getItem("LOGIN_KEY");
+    const device = localStorage.getItem("DEVICE_ID");
+    const expire = localStorage.getItem("SESSION_EXPIRE");
+
+    if(key && device===navigator.userAgent && Date.now()<expire){
+        document.getElementById("keySection").style.display = "none";
+        document.getElementById("botUI").style.display = "flex";
+    } else {
+        sendKey(); 
+        alert("🔑 New Key sent to Telegram!");
+    }
+})();
+
+/* CHECK KEY */
+function checkKey(){
+    if(isBlocked()){ alert("❌ You are blocked!"); return; }
+
+    const userKey = document.getElementById("keyInput").value;
+    const realKey = localStorage.getItem("LOGIN_KEY");
+    const savedDevice = localStorage.getItem("DEVICE_ID");
+
+    if(userKey === realKey){
+        if(savedDevice && savedDevice !== navigator.userAgent){
+            alert("❌ This key is already used on another device!");
+            return;
+        }
+        document.getElementById("keySection").style.display = "none";
+        document.getElementById("botUI").style.display = "flex";
+        localStorage.setItem("DEVICE_ID", navigator.userAgent);
+        localStorage.setItem("SESSION_EXPIRE", Date.now() + SESSION_DURATION);
+        addAdminLog("Key activated", realKey);
+        sendTelegramNotification("keyActivated");
+    } else {
+        alert("❌ Wrong Key");
+    }
+}
+
+/* GRID */
+const grid = document.getElementById("grid");
+for(let i=0;i<25;i++){
+    const d = document.createElement("div");
+    d.className="tile";
+    grid.appendChild(d);
+}
+
+/* SAFE & RANDOM PREDICT */
+const seed=document.getElementById("seed");
+const bet=document.getElementById("bet");
+async function predict(){
+    if(!seed.value||!bet.value){alert("Server Seed & Bet Amount required"); return;}
+
+    document.getElementById("pending").style.display="flex";
+    const steps=["Connecting...","Analyzing...","Calculating...","Finalizing..."];
+    for(let i=0;i<steps.length;i++){
+        pendingText.textContent = steps[i];
+        queueText.textContent = `Queue ${i+1}/${steps.length}`;
+        await new Promise(r=>setTimeout(r,400));
+    }
+    document.getElementById("pending").style.display="none";
+
+    const tiles=[...document.querySelectorAll(".tile")]; 
+    tiles.forEach(t=>{
+        t.classList.remove("selected","safe-tile");
+        t.style.transition="background 0.4s";
+    });
+
+    const mines = +document.getElementById("mines").value;
+
+    function shuffleArray(arr){
+        for(let i=arr.length-1;i>0;i--){
+            const j=Math.floor(Math.random()*(i+1));
+            [arr[i],arr[j]] = [arr[j],arr[i]];
+        }
+        return arr;
+    }
+
+    let mineCount = 0;
+    if(mines >= 1 && mines <= 4){
+        mineCount = Math.floor(Math.random()*4) + 3; // 3-6 tiles
+    } else if(mines >= 5 && mines <= 8){
+        mineCount = Math.floor(Math.random()*2) + 3; // 3-4 tiles
+    }
+
+    let positions = Array.from({length:25}, (_,i)=>i);
+    positions = shuffleArray(positions);
+
+    const selected = positions.slice(0, mineCount);
+
+    // Animate safe tiles
+    selected.forEach((i,idx)=>{
+        setTimeout(()=>{
+            tiles[i].classList.add("selected","safe-tile");
+            tiles[i].style.background="#9bff3f";
+        }, idx*150);
+    });
+
+    tiles.forEach((t,i)=>{
+        if(!selected.includes(i)){
+            t.style.background="#1e2a3a";
+        }
+    });
+}
+
+/* BLOCK/UNBLOCK KEYS */
+function blockKeyFromTelegram(key){
+    if(!blockedKeys.includes(key)){
+        blockedKeys.push(key);
+        localStorage.setItem("BLOCKED_KEYS",JSON.stringify(blockedKeys));
+        alert("Key "+key+" blocked!");
+    }
+}
+function unblockKeyFromTelegram(key){
+    blockedKeys=blockedKeys.filter(k=>k!==key);
+    localStorage.setItem("BLOCKED_KEYS",JSON.stringify(blockedKeys));
+    alert("Key "+key+" unblocked!");
+}
+</script>
+</body>
+</html>
